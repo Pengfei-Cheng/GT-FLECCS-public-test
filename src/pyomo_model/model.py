@@ -12,7 +12,8 @@ from .variables import declare_variables
 from .constraints import *
 from .obj import add_objective_function
 from pyomo.environ import ConcreteModel, Var, Constraint
-from .....main import StochasticModel
+# from .....main import StochasticModel
+from .....main import StoModelBuilder
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -91,8 +92,8 @@ def const_model(n_day=2, elec_price_signal="MiNg_150_NYISO", week_diff=1):
     weeks = range(52 // week_diff)
     signals = []
 
-    for w in weeks:
-        base = w * week_diff * 7 * 24
+    for m in weeks:
+        base = m * week_diff * 7 * 24
         # read the signal during that week
         _signal = power_price[base:base + n_hour].values
         signals.append(_signal)
@@ -119,35 +120,37 @@ def const_model(n_day=2, elec_price_signal="MiNg_150_NYISO", week_diff=1):
     # construct model
     logger.info("Constructing model...")
 
-    w = ConcreteModel()
+    m = ConcreteModel()
 
-    declare_variables(w, set_hour_0, set_scenario)
-    add_compress_vent_constraints(w, set_hour_0, set_scenario)
-    add_DAC_constraints(w, set_hour_0, set_hour, n_hour, set_scenario)
-    add_DAC_costing_constraints(w, set_hour_0, set_scenario)
-    add_disaggregated_constraints(w, set_hour_0, set_scenario)
-    add_OM_costing_constraints(w, set_hour_0, set_scenario)
-    add_operation_mode_logic_constraints(w, limit_start_up, set_hour_0, set_hour, set_scenario)
-    add_overall_var_constraints(w, set_hour_0, set_scenario)
-    add_PCC_constraints(w, set_hour_0, set_scenario)
-    add_power_constraints(w, set_hour_0, set_scenario)
-    add_steam_split_constraints(w, set_hour_0, set_scenario)
+    declare_variables(m, set_hour_0, set_scenario)
+    add_compress_vent_constraints(m, set_hour_0, set_scenario)
+    add_DAC_constraints(m, set_hour_0, set_hour, n_hour, set_scenario)
+    add_DAC_costing_constraints(m, set_hour_0, set_scenario)
+    add_disaggregated_constraints(m, set_hour_0, set_scenario)
+    add_OM_costing_constraints(m, set_hour_0, set_scenario)
+    add_operation_mode_logic_constraints(m, limit_start_up, set_hour_0, set_hour, set_scenario)
+    add_overall_var_constraints(m, set_hour_0, set_scenario)
+    add_PCC_constraints(m, set_hour_0, set_scenario)
+    add_power_constraints(m, set_hour_0, set_scenario)
+    add_steam_split_constraints(m, set_hour_0, set_scenario)
 
-    add_objective_function(w, cost_NG, cost_start_up, set_hour, set_scenario, scenario_prob, scenario_param)
+    add_objective_function(m, cost_NG, cost_start_up, set_hour, set_scenario, scenario_prob, scenario_param)
 
     logger.info("Done.")
 
     # --------------------------------------------------------------------------
     # print model size
 
-    logger.info(f"# variable: \t{sum(1 for _ in w.component_data_objects(Var))}")
-    logger.info(f"# constraint: \t{sum(1 for _ in w.component_data_objects(Constraint))}")
+    logger.info(f"# variable: \t{sum(1 for _ in m.component_data_objects(Var))}")
+    logger.info(f"# constraint: \t{sum(1 for _ in m.component_data_objects(Constraint))}")
 
     # --------------------------------------------------------------------------
     # --------------------------------------------------------------------------
     # --------------------------------------------------------------------------
 
     # model transformation -----------------------------------------------------
+
+    builder = StoModelBuilder('pyomo', name='FLECCS', m_type='MILP', hint=False)
 
     # set_scenario
     fs_vars = ["x_sorbent_total", "x_air_adsorb_max"]
@@ -171,7 +174,15 @@ def const_model(n_day=2, elec_price_signal="MiNg_150_NYISO", week_diff=1):
             - scenario_prob[s] * (a_cost_sorbent * m.x_sorbent_total * 3000 + a_cost_adsorb * m.x_air_adsorb_max * 48000) * (1 + 0.0311 + 0.0066 + 0.1779) * ( 0.3 + 0.7 / (1 + int_r) - sum(tax_r * depreciate_r * ((1 - depreciate_r) ** j) * ((1 + int_r) ** (- j - 2)) for j in range(19 + 1)) )
     objs = {s: _obj for s in set_scenario}
 
-    mm = StochasticModel()
-    mm.build_from_pyomo(w, fs_vars, fs_cons, set_scenario, objs, obj_sense=-1)
+    _content = {
+        'pm': m,
+        'y_set': fs_vars,
+        'scenarios': set_scenario,
+        'con_1': fs_cons,
+        'objs': objs,
+        'obj_sense': -1
+    }
 
-    return mm
+    sto_m = builder.build(**_content)
+
+    return sto_m
